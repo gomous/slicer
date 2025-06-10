@@ -1,0 +1,3 @@
+sudo docker build -t slicer-backend .
+
+sudo docker run -p 5050:5000 -v $(pwd)/files:/app/files slicer-backend
