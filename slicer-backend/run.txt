@@ -1,9 +1,7 @@
 sudo docker build -t slicer-backend .
 
-sudo docker run -p 5050:5000 -v $(pwd)/files:/app/files slicer-backend
-
 # Run the server 
-curl -F "model=@xyz.stl"      -F "layer_height=0.2"      -F "infill=20%"      -F "nozzle=0.4"      http://localhost:5000/slice
+sudo docker run -p 5050:5000 -v $(pwd)/files:/app/files slicer-backend
 
 # Slice the file
 curl -F "model=@files/xyz.stl"      -F "layer_height=0.2"      -F "infill=20%"      -F "nozzle=0.4"      http://localhost:5000/slice
