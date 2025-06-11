@@ -3,6 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Environment, Grid } from '@react-three/drei';
 import { useSlicerStore } from '../hooks/useSlicerStore';
 import { STLModel } from './STLModel';
+import { CentralFileDrop } from './CentralFileDrop';
 
 const LoadingSpinner: React.FC = () => (
   <div className="absolute inset-0 flex items-center justify-center bg-gray-50">
@@ -21,7 +22,7 @@ const ModelLoadingFallback: React.FC = () => (
 );
 
 export const ModelViewer: React.FC = () => {
-  const { fileState, setFileLoading } = useSlicerStore();
+  const { fileState, setFile, setPreview, setFileLoading } = useSlicerStore();
 
   const handleLoadComplete = () => {
     setFileLoading(false);
@@ -32,31 +33,27 @@ export const ModelViewer: React.FC = () => {
     console.error('STL Load Error:', error);
   };
 
+  const handleStlFile = (file: File) => {
+    if (!file.name.toLowerCase().endsWith('.stl')) {
+      return;
+    }
+    setFileLoading(true);
+    setFile(file);
+    if (fileState.preview) {
+      URL.revokeObjectURL(fileState.preview);
+    }
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+  };
+
   return (
     <div className="relative h-full bg-gradient-to-br from-gray-50 to-gray-100 rounded-lg border border-gray-200">
       {!fileState.file ? (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="text-center">
-            <div className="w-16 h-16 mx-auto mb-4 bg-gray-200 rounded-lg flex items-center justify-center">
-              <svg
-                className="w-8 h-8 text-gray-400"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
-                />
-                <polyline points="14,2 14,8 20,8" />
-              </svg>
-            </div>
-            <p className="text-gray-500 font-medium">No model loaded</p>
-            <p className="text-sm text-gray-400">Upload an STL file to preview</p>
-          </div>
-        </div>
+        <CentralFileDrop
+          accept=".stl"
+          onFile={handleStlFile}
+          message="Upload STL file here"
+        />
       ) : (
         <Canvas
           camera={{ position: [5, 5, 5], fov: 50 }}
