@@ -1,64 +1,79 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as GCodePreview from 'gcode-preview';
-import { CentralFileDrop } from './CentralFileDrop';
 import { useGcodeStore } from '../hooks/useGcodeStore';
 
-export const GcodeViewer: React.FC = () => {
+const GcodeViewer: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { gcodeFile, setGcodeFile } = useGcodeStore();
-  const [error, setError] = useState<string>('');
+  const { gcodeFile } = useGcodeStore();
+  const [error, setError] = useState<string | null>(null);
 
-  const renderGcode = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const gcode = event.target?.result as string;
-      if (canvasRef.current && gcode) {
-        canvasRef.current.width = canvasRef.current.width;
-        GCodePreview.init({
+  const renderGcode = async (file: File) => {
+    if (!canvasRef.current) return;
+
+    try {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        if (!e.target?.result || !canvasRef.current) return;
+
+        const gcode = e.target.result as string;
+        const preview = GCodePreview.init({
           canvas: canvasRef.current,
-          extrusionColor: 'hotpink',
+          extrusionColor: '#3B82F6',
           extrusionType: 'tube',
-          tubeDiameter: 1.5,
-        }).processGCode(gcode);
-      }
-    };
-    reader.readAsText(file);
-  };
+          tubeDiameter: 1.5
+        });
 
-  const handleGcodeFile = (file: File) => {
-    setError('');
-    if (!file.name.endsWith('.gcode')) {
-      setError('Please upload a .gcode file.');
-      return;
+        try {
+          await preview.processGCode(gcode);
+          setError(null);
+        } catch (err) {
+          console.error('Error processing G-code:', err);
+          setError('Error processing G-code. Please try again.');
+        }
+      };
+
+      reader.onerror = () => {
+        setError('Error reading G-code file');
+      };
+
+      reader.readAsText(file);
+    } catch (err) {
+      console.error('Error rendering G-code:', err);
+      setError('Error rendering G-code. Please try again.');
     }
-    setGcodeFile(file);
-    renderGcode(file);
   };
 
   useEffect(() => {
     if (gcodeFile) {
       renderGcode(gcodeFile);
     }
-    // eslint-disable-next-line
   }, [gcodeFile]);
 
+  if (error) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-gray-100">
+        <div className="text-red-500 text-center p-4">
+          <p>{error}</p>
+          <button 
+            onClick={() => setError(null)}
+            className="mt-2 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="relative h-full w-full bg-gradient-to-br from-gray-50 to-gray-100 rounded-lg border border-gray-200">
-      {!gcodeFile ? (
-        <CentralFileDrop
-          accept=".gcode"
-          onFile={handleGcodeFile}
-          message="Upload G-code file here"
-        />
-      ) : (
-        <canvas
-          ref={canvasRef}
-          width={800}
-          height={600}
-          className="w-full h-full"
-        />
-      )}
-      {error && <p className="absolute bottom-4 left-1/2 -translate-x-1/2 text-red-500 bg-white px-4 py-2 rounded shadow">{error}</p>}
+    <div className="w-full h-full bg-gray-100">
+      <canvas
+        ref={canvasRef}
+        className="w-full h-full"
+        style={{ touchAction: 'none' }}
+      />
     </div>
   );
-}; 
+};
+
+export default GcodeViewer; 

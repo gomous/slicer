@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { SlicingParameters, SlicingState, FileState } from '../types';
+import { slicerApi } from '../services/slicerApi';
+import { useGcodeStore } from './useGcodeStore';
 
 interface SlicerStore {
   // File state
@@ -73,22 +75,23 @@ export const useSlicerStore = create<SlicerStore>((set, get) => ({
       }
     }));
 
-    // Mock API call with progress simulation
     try {
-      for (let i = 0; i <= 100; i += 10) {
-        await new Promise(resolve => setTimeout(resolve, 200));
-        set((state) => ({
-          slicingState: { ...state.slicingState, progress: i }
-        }));
-      }
+      // Call the actual slicing API
+      const slicedFile = await slicerApi.sliceFile(fileState.file, {
+        layer_height: parameters.layerHeight,
+        infill: parameters.infillDensity,
+        nozzle: parameters.nozzleSize
+      });
+
+      // Update the G-code store with the sliced file
+      useGcodeStore.getState().setGcodeFile(slicedFile);
       
-      // Mock successful response
-      await new Promise(resolve => setTimeout(resolve, 500));
       set((state) => ({
         slicingState: {
           ...state.slicingState,
           isSlicing: false,
-          result: 'G-code generated successfully! (Mock result)',
+          progress: 100,
+          result: 'G-code generated successfully!',
         }
       }));
     } catch (error) {
@@ -96,12 +99,17 @@ export const useSlicerStore = create<SlicerStore>((set, get) => ({
         slicingState: {
           ...state.slicingState,
           isSlicing: false,
-          error: 'Failed to slice model',
+          error: error instanceof Error ? error.message : 'Failed to slice model',
         }
       }));
     }
   },
   resetSlicing: () => set((state) => ({
-    slicingState: { isSlicing: false, progress: 0 }
+    slicingState: {
+      isSlicing: false,
+      progress: 0,
+      error: undefined,
+      result: undefined,
+    }
   })),
 }));
