@@ -1,15 +1,16 @@
 import React from 'react';
 import { Home, Clock, Globe, FlaskConical, Book, LogIn } from 'lucide-react';
 
-const navItems = [
-  { label: 'Home', icon: <Home className="h-5 w-5 mr-3" />, active: true },
-  { label: 'Recently opened', icon: <Clock className="h-5 w-5 mr-3" /> },
-  { label: 'Online Models', icon: <Globe className="h-5 w-5 mr-3" />, badge: 'New' },
-  { label: 'Makerlab', icon: <FlaskConical className="h-5 w-5 mr-3" />, badge: 'New' },
-  { label: 'User Manual', icon: <Book className="h-5 w-5 mr-3" /> },
-];
+// Accept tab prop for future extensibility
+export const Sidebar: React.FC<{ tab?: string }> = () => {
+  const navItems = [
+    { label: 'Home', icon: <Home className="h-5 w-5 mr-3" />, active: true },
+    { label: 'Recently opened', icon: <Clock className="h-5 w-5 mr-3" /> },
+    { label: 'Online Models', icon: <Globe className="h-5 w-5 mr-3" />, badge: 'New' },
+    { label: 'Makerlab', icon: <FlaskConical className="h-5 w-5 mr-3" />, badge: 'New' },
+    { label: 'User Manual', icon: <Book className="h-5 w-5 mr-3" /> },
+  ];
 
-export const Sidebar: React.FC = () => {
   return (
     <div className="w-72 bg-white border-r border-gray-200 flex flex-col h-full">
       {/* Login/Register */}

@@ -19,7 +19,7 @@ interface Path {
 
 const GcodeViewer: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { gcodeFile } = useGcodeStore();
+  const { gcodeFile, getCachedGcode } = useGcodeStore();
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -35,6 +35,10 @@ const GcodeViewer: React.FC = () => {
 
     setIsLoading(true);
     try {
+      // Check if we have a cached version of this file
+      const cachedFile = getCachedGcode(file.name);
+      const fileToUse = cachedFile || file;
+
       const reader = new FileReader();
       reader.onload = async (e) => {
         if (!e.target?.result || !canvasRef.current) return;
@@ -65,7 +69,7 @@ const GcodeViewer: React.FC = () => {
         setError('Error reading G-code file');
       };
 
-      reader.readAsText(file);
+      reader.readAsText(fileToUse);
     } catch (err) {
       console.error('Error rendering G-code:', err);
       setError('Error rendering G-code. Please try again.');
