@@ -1,11 +1,13 @@
-import React, { Suspense, useState, useRef } from 'react';
-import { Canvas, ThreeEvent } from '@react-three/fiber';
+import React, { Suspense, useState, useRef, useEffect } from 'react';
+import { Canvas, ThreeEvent, useThree } from '@react-three/fiber';
 import { OrbitControls, Environment, Grid } from '@react-three/drei';
 import { useSlicerStore } from '../hooks/useSlicerStore';
 import { useFileUploadStore } from '../hooks/useFileUploadStore';
-import { STLModel } from './STLModel';
+import { STLModel, STLModelHandle } from './STLModel';
 import { CentralFileDrop } from './CentralFileDrop';
 import { PlusSquare, Grid2x2, Monitor, Layout, FileText, Move, RotateCw, SquareStack, Square, Layers, Crop, Type, Droplet, Ruler, Puzzle } from 'lucide-react';
+import * as THREE from 'three';
+import { Vector3, Mesh, MeshStandardMaterial } from 'three';
 
 const LoadingSpinner: React.FC = () => (
   <div className="absolute inset-0 flex items-center justify-center bg-gray-50">
@@ -16,18 +18,36 @@ const LoadingSpinner: React.FC = () => (
   </div>
 );
 
-const ModelLoadingFallback: React.FC = () => (
-  <mesh position={[0, 0, 0]}>
-    <boxGeometry args={[0.1, 0.1, 0.1]} />
-    <meshStandardMaterial color="#94A3B8" transparent opacity={0.5} />
-  </mesh>
-);
-
 const toolbarIcons = [
   <PlusSquare key="plus" />, <Grid2x2 key="grid" />, <Monitor key="monitor" />, <Layout key="layout" />, <FileText key="file" />,
   <Move key="move" className="text-blue-600" />, <RotateCw key="rotate" />, <SquareStack key="stack" />, <Square key="square" />, <Layers key="layers" />,
   <Crop key="crop" />, <Type key="type" />, <Droplet key="droplet" />, <Ruler key="ruler" />, <Puzzle key="puzzle" />
 ];
+
+const InteractiveModel = ({ file, onLoadComplete, onLoadError }: { file: File; onLoadComplete?: () => void; onLoadError?: (error: string) => void }) => {
+  const stlRef = useRef<STLModelHandle>(null);
+
+  const handlePointerOver = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    stlRef.current?.setColor('#60A5FA');
+  };
+
+  const handlePointerOut = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    stlRef.current?.setColor('#3B82F6');
+  };
+
+  return (
+    <STLModel
+      ref={stlRef}
+      file={file}
+      onLoadComplete={onLoadComplete}
+      onLoadError={onLoadError}
+      onPointerOver={handlePointerOver}
+      onPointerOut={handlePointerOut}
+    />
+  );
+};
 
 export const ModelViewer: React.FC = () => {
   const { fileState, setFile, setPreview, setFileLoading } = useSlicerStore();
@@ -35,13 +55,18 @@ export const ModelViewer: React.FC = () => {
   const [moveMode, setMoveMode] = useState(false);
   const [modelPosition, setModelPosition] = useState<[number, number, number]>([0, 0, 0]);
   const dragStart = useRef<{ x: number; y: number; pos: [number, number, number] } | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const handleLoadComplete = () => {
     setFileLoading(false);
+    setIsLoading(false);
   };
 
   const handleLoadError = (error: string) => {
     setFileLoading(false);
+    setIsLoading(false);
+    setError(error);
     console.error('STL Load Error:', error);
   };
 
@@ -126,13 +151,16 @@ export const ModelViewer: React.FC = () => {
             camera={{ position: [5, 5, 5], fov: 50 }}
             style={{ background: 'transparent', width: '100%', height: '100%' }}
           >
-            <Suspense fallback={<ModelLoadingFallback />}>
+            <Suspense fallback={
+              <mesh rotation={[0, 0, 0]}>
+                <boxGeometry args={[0.5, 0.5, 0.5]} />
+                <meshStandardMaterial color="#94A3B8" transparent opacity={0.5} />
+              </mesh>
+            }>
               <Environment preset="studio" />
               <ambientLight intensity={0.4} />
               <directionalLight position={[10, 10, 5]} intensity={0.8} />
               <directionalLight position={[-10, -10, -5]} intensity={0.3} />
-              
-              {/* Grid */}
               <Grid
                 args={[10, 10]}
                 cellSize={1}
@@ -146,19 +174,16 @@ export const ModelViewer: React.FC = () => {
                 followCamera={false}
                 infiniteGrid={true}
               />
-              
-              {/* STL Model */}
               <group
                 position={modelPosition}
                 onPointerDown={handlePointerDown}
               >
-                <STLModel 
+                <InteractiveModel 
                   file={fileState.file}
                   onLoadComplete={handleLoadComplete}
                   onLoadError={handleLoadError}
                 />
               </group>
-              
               <OrbitControls
                 enablePan={!moveMode}
                 enableZoom={true}
@@ -171,7 +196,7 @@ export const ModelViewer: React.FC = () => {
         </div>
       )}
       
-      {fileState.isLoading && <LoadingSpinner />}
+      {isLoading && <LoadingSpinner />}
     </div>
   );
 };
