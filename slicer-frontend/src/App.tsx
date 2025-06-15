@@ -10,22 +10,22 @@ import { ParameterForm } from './components/ParameterForm';
 
 function App() {
   const [tab, setTab] = useState<'home' | 'prepare' | 'preview' | 'device' | 'project' | 'calibration'>('home');
-  const { fileState, parameters, startSlicing } = useSlicerStore();
+  const { fileState, parameters, startSlicing, combinedStlFile } = useSlicerStore();
   const { gcodeFile } = useGcodeStore();
   const [error, setError] = useState<string | null>(null);
 
   // Automatically slice when switching to preview tab
   useEffect(() => {
-    if (tab === 'preview' && fileState.file) {
+    if (tab === 'preview' && (combinedStlFile || fileState.files.size > 0)) {
       startSlicing();
     }
-  }, [tab, fileState.file, startSlicing]);
+  }, [tab, combinedStlFile, fileState.files, startSlicing]);
 
   // Top nav items (with Home first)
   const navItems = [
     { key: 'home', label: 'Home', icon: <HomeIcon className="h-5 w-5 mr-2" /> },
     { key: 'prepare', label: 'Prepare' },
-    { key: 'preview', label: 'Preview', disabled: !fileState.file },
+    { key: 'preview', label: 'Preview', disabled: !(combinedStlFile || fileState.files.size > 0) },
     { key: 'device', label: 'Device' },
     { key: 'project', label: 'Project' },
     { key: 'calibration', label: 'Calibration' },

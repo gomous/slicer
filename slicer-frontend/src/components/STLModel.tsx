@@ -43,48 +43,73 @@ export const STLModel = forwardRef<STLModelHandle, STLModelProps>(
       }
     }));
 
-    useEffect(() => {
+  useEffect(() => {
       let disposed = false;
-      if (!file) return;
+    if (!file) return;
 
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        try {
-          const buffer = event.target?.result;
-          if (buffer && buffer instanceof ArrayBuffer) {
-            const loader = new STLLoader();
-            const loadedGeometry = loader.parse(buffer);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const buffer = event.target?.result;
+        if (buffer && buffer instanceof ArrayBuffer) {
+          const loader = new STLLoader();
+          const loadedGeometry = loader.parse(buffer);
 
-            // Center geometry
+          // Auto-drop: move the model so its lowest Z is at z=0 (build plate)
+          loadedGeometry.computeBoundingBox();
+          const size = loadedGeometry.boundingBox!.getSize(new Vector3());
+          const maxDimension = Math.max(size.x, size.y, size.z);
+          // Auto-detect and scale to mm
+          if (maxDimension > 500) {
+            // Likely inches, convert to mm
+            loadedGeometry.scale(25.4, 25.4, 25.4);
+          } else if (maxDimension < 1) {
+            // Likely meters, convert to mm
+            loadedGeometry.scale(1000, 1000, 1000);
+          }
+          loadedGeometry.computeBoundingBox();
+          const minZ = loadedGeometry.boundingBox!.min.z;
+          loadedGeometry.translate(0, 0, -minZ);
+
+          // Scale to fit within 150mm build plate (smaller for margin)
+          loadedGeometry.computeBoundingBox();
+          const fitSize = loadedGeometry.boundingBox!.getSize(new Vector3());
+          const fitMax = Math.max(fitSize.x, fitSize.y, fitSize.z);
+          if (fitMax > 150) {
+            let fitScale = 150 / fitMax;
+            fitScale *= 0.1; // Make 10x smaller
+            loadedGeometry.scale(fitScale, fitScale, fitScale);
+            // Re-drop to build plate after scaling
             loadedGeometry.computeBoundingBox();
-            const center = loadedGeometry.boundingBox!.getCenter(new Vector3());
-            loadedGeometry.translate(-center.x, -center.y, -center.z);
-
-            // Scale
-            const size = loadedGeometry.boundingBox!.getSize(new Vector3());
-            const maxDimension = Math.max(size.x, size.y, size.z);
-            const scale = 4 / maxDimension;
-            loadedGeometry.scale(scale, scale, scale);
+            const newMinZ = loadedGeometry.boundingBox!.min.z;
+            loadedGeometry.translate(0, 0, -newMinZ);
+          } else {
+            // Even if not fitting, still shrink by 10x
+            loadedGeometry.scale(0.1, 0.1, 0.1);
+            loadedGeometry.computeBoundingBox();
+            const newMinZ = loadedGeometry.boundingBox!.min.z;
+            loadedGeometry.translate(0, 0, -newMinZ);
+          }
 
             // Dispose old geometry if exists
             if (geometry) geometry.dispose();
 
             if (!disposed) {
-              setGeometry(loadedGeometry);
-              onLoadComplete?.();
+          setGeometry(loadedGeometry);
+          onLoadComplete?.();
             }
-          }
-        } catch (err) {
-          console.error('Failed to parse STL:', err);
-          onLoadError?.('Failed to parse STL');
         }
-      };
+      } catch (err) {
+        console.error('Failed to parse STL:', err);
+        onLoadError?.('Failed to parse STL');
+      }
+    };
 
       reader.onerror = () => {
         onLoadError?.('Failed to read file');
       };
 
-      reader.readAsArrayBuffer(file);
+    reader.readAsArrayBuffer(file);
 
       return () => {
         disposed = true;
@@ -93,11 +118,11 @@ export const STLModel = forwardRef<STLModelHandle, STLModelProps>(
           materialRef.current.dispose();
         }
       };
-    }, [file]);
+  }, [file]);
 
-    if (!geometry) return null;
+  if (!geometry) return null;
 
-    return (
+  return (
       <mesh
         geometry={geometry}
         material={materialRef.current}
@@ -106,6 +131,6 @@ export const STLModel = forwardRef<STLModelHandle, STLModelProps>(
         castShadow
         receiveShadow
       />
-    );
+  );
   }
 );

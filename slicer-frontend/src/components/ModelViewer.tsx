@@ -5,7 +5,16 @@ import { STLModel } from './STLModel';
 import { useSlicerStore } from '../hooks/useSlicerStore';
 import { ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
+import { STLLoader, STLExporter } from 'three-stdlib';
+import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { TransformControlsUI } from './TransformControlsUI';
+
+// Build plate dimensions in mm
+const BUILD_PLATE_WIDTH = 200;
+const BUILD_PLATE_HEIGHT = 200;
+const GRID_SIZE = 10; // Size of each grid cell in mm
+const MIN_DISTANCE = 5; // Minimum distance between models in mm
+const MIN_HEIGHT_ABOVE_PLATE = 0.1; // Minimum height above build plate in mm
 
 interface ModelInstance {
   id: string;
@@ -13,10 +22,91 @@ interface ModelInstance {
   position: [number, number, number];
   rotation: [number, number, number];
   scale: [number, number, number];
+  boundingBox?: THREE.Box3;
 }
 
+// Build plate component
+const BuildPlate = () => {
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
+      <planeGeometry args={[BUILD_PLATE_WIDTH / 10, BUILD_PLATE_HEIGHT / 10]} />
+      <meshStandardMaterial 
+        color="#E5E7EB"
+        metalness={0.1}
+        roughness={0.8}
+        transparent={true}
+        opacity={0.8}
+      />
+  </mesh>
+);
+};
+
+// Function to find a non-overlapping position
+const findNonOverlappingPosition = (
+  models: ModelInstance[],
+  boundingBox: THREE.Box3,
+  buildPlateWidth: number,
+  buildPlateHeight: number
+): [number, number, number] => {
+  const gridWidth = Math.floor(buildPlateWidth / GRID_SIZE);
+  const gridHeight = Math.floor(buildPlateHeight / GRID_SIZE);
+  
+  // Start from the center and spiral outward
+  const centerX = Math.floor(gridWidth / 2);
+  const centerZ = Math.floor(gridHeight / 2);
+  
+  // Create a spiral pattern of positions to check
+  const positions: [number, number][] = [];
+  let x = centerX;
+  let z = centerZ;
+  let step = 1;
+  let leg = 0;
+  
+  while (positions.length < gridWidth * gridHeight) {
+    positions.push([x, z]);
+    
+    switch (leg) {
+      case 0: x += step; break;
+      case 1: z += step; break;
+      case 2: x -= step; break;
+      case 3: z -= step; break;
+    }
+    
+    if (Math.abs(x - centerX) === step && Math.abs(z - centerZ) === step) {
+      leg = (leg + 1) % 4;
+      if (leg === 0) step++;
+    }
+  }
+  
+  // Check each position
+  for (const [gridX, gridZ] of positions) {
+    const worldX = (gridX - centerX) * GRID_SIZE;
+    const worldZ = (gridZ - centerZ) * GRID_SIZE;
+    
+    // Create a temporary bounding box at this position
+    const tempBox = boundingBox.clone();
+    tempBox.translate(new THREE.Vector3(worldX, MIN_HEIGHT_ABOVE_PLATE, worldZ));
+    
+    // Check if this position overlaps with any existing model
+    let overlaps = false;
+    for (const model of models) {
+      if (model.boundingBox && tempBox.intersectsBox(model.boundingBox)) {
+        overlaps = true;
+        break;
+      }
+    }
+    
+    if (!overlaps) {
+      return [worldX, MIN_HEIGHT_ABOVE_PLATE, worldZ];
+    }
+  }
+  
+  // If no position found, return center
+  return [0, MIN_HEIGHT_ABOVE_PLATE, 0];
+};
+
 const InteractiveModel = ({ 
-  modelInstance, 
+  modelInstance,
   isSelected,
   onSelect,
   onTransformChange,
@@ -25,7 +115,8 @@ const InteractiveModel = ({
   showX,
   showY,
   showZ,
-  isShiftPressed
+  isShiftPressed,
+  onBoundingBoxUpdate
 }: { 
   modelInstance: ModelInstance;
   isSelected: boolean;
@@ -37,13 +128,23 @@ const InteractiveModel = ({
   showY: boolean;
   showZ: boolean;
   isShiftPressed: boolean;
+  onBoundingBoxUpdate: (id: string, boundingBox: THREE.Box3) => void;
 }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   const transformRef = useRef<any>(null);
+  const boxHelperRef = useRef<THREE.BoxHelper | null>(null);
   const { gl, camera, raycaster, mouse } = useThree();
   const [isDragging, setIsDragging] = useState(false);
   const [activeAxis, setActiveAxis] = useState<'x' | 'y' | 'z' | null>(null);
   const lastMousePosition = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isModelLoaded, setIsModelLoaded] = useState(false);
+
+  // Initialize box helper when mesh is loaded
+  useEffect(() => {
+    if (meshRef.current && isModelLoaded && !boxHelperRef.current) {
+      boxHelperRef.current = new THREE.BoxHelper(meshRef.current, isSelected ? 0x00ff00 : 0xffffff);
+    }
+  }, [meshRef.current, isModelLoaded, isSelected]);
 
   // Update transform controls when mode or space changes
   useEffect(() => {
@@ -62,96 +163,71 @@ const InteractiveModel = ({
     }
   }, [isShiftPressed]);
 
+  // Update bounding box when model changes
+  useEffect(() => {
+    if (meshRef.current && isModelLoaded) {
+      const boundingBox = new THREE.Box3().setFromObject(meshRef.current);
+      onBoundingBoxUpdate(modelInstance.id, boundingBox);
+      
+      // Update box helper
+      if (boxHelperRef.current) {
+        boxHelperRef.current.update();
+      }
+    }
+  }, [modelInstance.position, modelInstance.rotation, modelInstance.scale, onBoundingBoxUpdate, isModelLoaded]);
+
+  // Update box helper color when selection changes
+  useEffect(() => {
+    if (boxHelperRef.current) {
+      boxHelperRef.current.material.color.setHex(isSelected ? 0x00ff00 : 0xffffff);
+    }
+  }, [isSelected]);
+
   // Handle transform changes
   const handleTransformChange = () => {
     if (meshRef.current) {
       const position = meshRef.current.position.toArray() as [number, number, number];
       const rotation = meshRef.current.rotation.toArray() as [number, number, number];
       const scale = meshRef.current.scale.toArray() as [number, number, number];
+      
+      // Ensure the model stays above the build plate
+      if (position[1] < MIN_HEIGHT_ABOVE_PLATE) {
+        position[1] = MIN_HEIGHT_ABOVE_PLATE;
+        meshRef.current.position.y = MIN_HEIGHT_ABOVE_PLATE;
+      }
+      
       onTransformChange(position, rotation, scale);
     }
   };
 
-  // Handle pointer events
-  const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+  // Handle transform start
+  const handleTransformStart = (e: any) => {
+    e.stopPropagation();
+    setIsDragging(true);
+    setActiveAxis(e.axis);
+    lastMousePosition.current = { x: mouse.x, y: mouse.y };
+    gl.domElement.style.cursor = 'grabbing';
+  };
+
+  // Handle transform end
+  const handleTransformEnd = () => {
+    setIsDragging(false);
+    setActiveAxis(null);
+    gl.domElement.style.cursor = 'auto';
+  };
+
+  // Handle pointer down
+  const handlePointerDown = (e: any) => {
     e.stopPropagation();
     onSelect();
   };
 
+  // Handle pointer missed
   const handlePointerMissed = () => {
-    if (isSelected && !isDragging) {
+    if (!isDragging) {
       onSelect();
     }
   };
-
-  // Handle transform control events
-  const handleTransformStart = (e: ThreeEvent<PointerEvent>) => {
-    // Get the axis that was clicked
-    const axis = e.object.name?.toLowerCase() as 'x' | 'y' | 'z';
-    if (axis) {
-      setActiveAxis(axis);
-      setIsDragging(true);
-      gl.domElement.style.cursor = 'grabbing';
-      lastMousePosition.current = { x: e.clientX, y: e.clientY };
-      window.addEventListener('pointerup', handleGlobalPointerUp);
-      window.addEventListener('pointermove', handlePointerMove);
-    }
-  };
-
-  const handlePointerMove = (e: PointerEvent) => {
-    if (isDragging && activeAxis && meshRef.current) {
-      const deltaX = e.clientX - lastMousePosition.current.x;
-      const deltaY = e.clientY - lastMousePosition.current.y;
-      lastMousePosition.current = { x: e.clientX, y: e.clientY };
-
-      const speed = 0.01;
-      if (transformMode === 'translate') {
-        if (activeAxis === 'x') {
-          meshRef.current.position.x += deltaX * speed;
-        } else if (activeAxis === 'y') {
-          meshRef.current.position.y -= deltaY * speed;
-        } else if (activeAxis === 'z') {
-          meshRef.current.position.z += deltaX * speed;
-        }
-        handleTransformChange();
-      } else if (transformMode === 'rotate') {
-        if (activeAxis === 'x') {
-          meshRef.current.rotation.x += deltaY * speed;
-        } else if (activeAxis === 'y') {
-          meshRef.current.rotation.y += deltaX * speed;
-        } else if (activeAxis === 'z') {
-          meshRef.current.rotation.z += deltaX * speed;
-        }
-        handleTransformChange();
-      } else if (transformMode === 'scale') {
-        const scaleDelta = (deltaX + deltaY) * speed;
-        if (activeAxis === 'x') {
-          meshRef.current.scale.x += scaleDelta;
-        } else if (activeAxis === 'y') {
-          meshRef.current.scale.y += scaleDelta;
-        } else if (activeAxis === 'z') {
-          meshRef.current.scale.z += scaleDelta;
-        }
-        handleTransformChange();
-      }
-    }
-  };
-
-  const handleGlobalPointerUp = () => {
-    setIsDragging(false);
-    setActiveAxis(null);
-    gl.domElement.style.cursor = 'auto';
-    window.removeEventListener('pointerup', handleGlobalPointerUp);
-    window.removeEventListener('pointermove', handlePointerMove);
-  };
-
-  // Cleanup global event listeners
-  useEffect(() => {
-    return () => {
-      window.removeEventListener('pointerup', handleGlobalPointerUp);
-      window.removeEventListener('pointermove', handlePointerMove);
-    };
-  }, []);
 
   return (
     <group>
@@ -165,6 +241,7 @@ const InteractiveModel = ({
         enabled={isSelected}
         onObjectChange={handleTransformChange}
         onPointerDown={handleTransformStart}
+        onPointerUp={handleTransformEnd}
         size={1.5}
         axis={activeAxis || undefined}
         translationSnap={isShiftPressed ? 0.1 : null}
@@ -179,9 +256,32 @@ const InteractiveModel = ({
           onPointerDown={handlePointerDown}
           onPointerMissed={handlePointerMissed}
         >
-          <STLModel file={modelInstance.file} />
+          <STLModel 
+            file={modelInstance.file}
+            onLoadComplete={() => {
+              if (meshRef.current) {
+                // Rotate the model to align with Z-axis
+                meshRef.current.rotation.x = -Math.PI / 2;
+                
+                const boundingBox = new THREE.Box3().setFromObject(meshRef.current);
+                // Ensure the model is above the build plate
+                const minY = boundingBox.min.y;
+                if (minY < MIN_HEIGHT_ABOVE_PLATE) {
+                  const offset = MIN_HEIGHT_ABOVE_PLATE - minY;
+                  meshRef.current.position.y += offset;
+                  boundingBox.translate(new THREE.Vector3(0, offset, 0));
+                }
+                onBoundingBoxUpdate(modelInstance.id, boundingBox);
+                setIsModelLoaded(true);
+              }
+            }}
+          />
         </mesh>
       </TransformControls>
+      {/* Add box helper for visualization */}
+      {boxHelperRef.current && isModelLoaded && (
+        <primitive object={boxHelperRef.current} />
+      )}
     </group>
   );
 };
@@ -192,7 +292,8 @@ const Scene = ({
   showX, 
   showY, 
   showZ,
-  isShiftPressed
+  isShiftPressed,
+  setCombinedStlUrl
 }: { 
   transformMode: 'translate' | 'rotate' | 'scale';
   transformSpace: 'world' | 'local';
@@ -200,6 +301,7 @@ const Scene = ({
   showY: boolean;
   showZ: boolean;
   isShiftPressed: boolean;
+  setCombinedStlUrl: (url: string | null) => void;
 }) => {
   const { fileState } = useSlicerStore();
   const [models, setModels] = useState<ModelInstance[]>([]);
@@ -210,22 +312,35 @@ const Scene = ({
 
   // Add new model when file is uploaded
   useEffect(() => {
-    if (fileState.file) {
-      const fileName = fileState.file.name;
-      // Check if we've already processed this file
-      if (!processedFiles.current.has(fileName)) {
-        processedFiles.current.add(fileName);
+    const currentFiles = Array.from(fileState.files.values());
+    const currentFileNames = new Set(currentFiles.map(f => f.name));
+    
+    // Remove models for files that no longer exist
+    setModels(prev => {
+      const newModels = prev.filter(model => currentFileNames.has(model.file.name));
+      // Update processed files set
+      processedFiles.current = new Set(currentFileNames);
+      return newModels;
+    });
+
+    // Add new models for files that don't have models yet
+    currentFiles.forEach(file => {
+      if (!processedFiles.current.has(file.name)) {
+        processedFiles.current.add(file.name);
+        
+        // Create a new model with initial position
         const newModel: ModelInstance = {
-          id: Date.now().toString(),
-          file: fileState.file,
-          position: [0, 0, 0],
+          id: `${file.name}-${Date.now()}-${Math.random()}`,
+          file: file,
+          position: [0, 0.1, 0],
           rotation: [0, 0, 0],
           scale: [1, 1, 1]
         };
+        
         setModels(prev => [...prev, newModel]);
       }
-    }
-  }, [fileState.file]);
+    });
+  }, [fileState.files]);
 
   const handleTransformChange = (id: string, position: [number, number, number], rotation: [number, number, number], scale: [number, number, number]) => {
     setModels(prev => prev.map(model => 
@@ -233,6 +348,36 @@ const Scene = ({
         ? { ...model, position, rotation, scale }
         : model
     ));
+  };
+
+  const handleBoundingBoxUpdate = (id: string, boundingBox: THREE.Box3) => {
+    setModels(prev => {
+      const model = prev.find(m => m.id === id);
+      if (!model) return prev;
+
+      // If this is the first bounding box update for this model, find a non-overlapping position
+      if (!model.boundingBox) {
+        const position = findNonOverlappingPosition(
+          prev.filter(m => m.id !== id),
+          boundingBox,
+          BUILD_PLATE_WIDTH,
+          BUILD_PLATE_HEIGHT
+        );
+        
+        return prev.map(m => 
+          m.id === id 
+            ? { ...m, position, boundingBox }
+            : m
+        );
+      }
+
+      // Otherwise just update the bounding box
+      return prev.map(m => 
+        m.id === id 
+          ? { ...m, boundingBox }
+          : m
+      );
+    });
   };
 
   // Handle click outside to deselect
@@ -264,27 +409,79 @@ const Scene = ({
     }
   };
 
+  // Move the combined STL logic here
+  useEffect(() => {
+    const combineAndExport = async () => {
+      if (!models || models.length === 0) {
+        setCombinedStlUrl(null);
+        return;
+      }
+      const loader = new STLLoader();
+      const transformedGeometries: THREE.BufferGeometry[] = [];
+      for (const model of models) {
+        const buffer = await model.file.arrayBuffer();
+        const geometry = loader.parse(buffer);
+        geometry.computeBoundingBox();
+        // Auto-drop
+        const minZ = geometry.boundingBox!.min.z;
+        geometry.translate(0, 0, -minZ);
+        // Apply transform
+        const matrix = new THREE.Matrix4();
+        matrix.compose(
+          new THREE.Vector3(...model.position),
+          new THREE.Quaternion().setFromEuler(new THREE.Euler(...model.rotation)),
+          new THREE.Vector3(...model.scale)
+        );
+        geometry.applyMatrix4(matrix);
+        // Strip all attributes except 'position'
+        Object.keys(geometry.attributes).forEach(attr => {
+          if (attr !== 'position') geometry.deleteAttribute(attr);
+        });
+        transformedGeometries.push(geometry);
+      }
+      const mergedGeometry = BufferGeometryUtils.mergeGeometries(transformedGeometries, false);
+      if (!mergedGeometry) {
+        setCombinedStlUrl(null);
+        return;
+      }
+      const exporter = new STLExporter();
+      const mesh = new THREE.Mesh(mergedGeometry);
+      const stlString = exporter.parse(mesh);
+      const blob = new Blob([stlString], { type: 'model/stl' });
+      // No download, just create the File object for backend
+      const combinedStlFile = new File([blob], 'combined.stl', { type: 'model/stl' });
+      useSlicerStore.getState().setCombinedStlFile(combinedStlFile);
+    };
+    combineAndExport();
+    return () => {};
+  }, [models, setCombinedStlUrl]);
+
   return (
     <>
-      <Environment preset="studio" />
-      <ambientLight intensity={0.4} />
-      <directionalLight position={[10, 10, 5]} intensity={0.8} />
-      <directionalLight position={[-10, -10, -5]} intensity={0.3} />
+            <Environment preset="studio" />
+            <ambientLight intensity={0.4} />
+            <directionalLight position={[10, 10, 5]} intensity={0.8} />
+            <directionalLight position={[-10, -10, -5]} intensity={0.3} />
+            
+      {/* Build plate */}
+      <BuildPlate />
       
-      <Grid
-        args={[10, 10]}
-        cellSize={1}
-        cellThickness={0.5}
-        cellColor="#6B7280"
-        sectionSize={5}
-        sectionThickness={1}
-        sectionColor="#374151"
-        fadeDistance={25}
-        fadeStrength={1}
-        followCamera={false}
-        infiniteGrid={true}
-      />
-
+      {/* Grid helper for build plate */}
+            <Grid
+        args={[BUILD_PLATE_WIDTH / 10, BUILD_PLATE_WIDTH / 10]}
+              cellSize={1}
+              cellThickness={0.5}
+              cellColor="#6B7280"
+              sectionSize={5}
+              sectionThickness={1}
+              sectionColor="#374151"
+              fadeDistance={25}
+              fadeStrength={1}
+              followCamera={false}
+        infiniteGrid={false}
+        position={[0, 0.01, 0]} // Slightly above build plate to prevent z-fighting
+            />
+            
       {models.map(model => (
         <InteractiveModel
           key={model.id}
@@ -298,18 +495,19 @@ const Scene = ({
           showY={showY}
           showZ={showZ}
           isShiftPressed={isShiftPressed}
-        />
+          onBoundingBoxUpdate={handleBoundingBoxUpdate}
+            />
       ))}
-
-      <OrbitControls
+            
+            <OrbitControls
         ref={orbitControlsRef}
         enablePan={!isDragging}
         enableZoom={!isDragging}
         enableRotate={!isDragging}
-        minDistance={2}
-        maxDistance={20}
+              minDistance={2}
+              maxDistance={20}
         makeDefault
-      />
+            />
 
       <mesh onPointerDown={handleCanvasClick} visible={false}>
         <planeGeometry args={[1000, 1000]} />
@@ -327,6 +525,7 @@ export const ModelViewer = () => {
   const [showZ, setShowZ] = useState(true);
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [isShiftPressed, setIsShiftPressed] = useState(false);
+  const { fileState } = useSlicerStore();
 
   // Keyboard controls
   useEffect(() => {
@@ -389,6 +588,7 @@ export const ModelViewer = () => {
           showY={showY}
           showZ={showZ}
           isShiftPressed={isShiftPressed}
+          setCombinedStlUrl={() => {}}
         />
       </Canvas>
       <TransformControlsUI

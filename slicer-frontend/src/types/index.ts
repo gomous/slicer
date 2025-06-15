@@ -13,7 +13,7 @@ export interface SlicingState {
 }
 
 export interface FileState {
-  file: File | null;
+  files: Map<string, File>;
   preview: string | null;
   isLoading: boolean;
 }

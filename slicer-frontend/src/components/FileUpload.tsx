@@ -9,7 +9,7 @@ interface FileWithPreview {
 }
 
 export const FileUpload: React.FC = () => {
-  const { setFile, setFileLoading } = useSlicerStore();
+  const { setFile, removeFile, setFileLoading } = useSlicerStore();
   const [error, setError] = useState<string | null>(null);
   const [files, setFiles] = useState<FileWithPreview[]>([]);
 
@@ -26,7 +26,7 @@ export const FileUpload: React.FC = () => {
     
     // Add each STL file
     stlFiles.forEach(file => {
-      const url = URL.createObjectURL(file);
+    const url = URL.createObjectURL(file);
       setFiles(prev => [...prev, { file, preview: url }]);
       // Set the file in the store to trigger model loading
       setFile(file);
@@ -48,11 +48,11 @@ export const FileUpload: React.FC = () => {
       const removedFile = prev.find(f => f.file === fileToRemove);
       if (removedFile) {
         URL.revokeObjectURL(removedFile.preview);
-      }
+    }
       return newFiles;
     });
-    // Clear the file in the store
-    setFile(null);
+    // Remove the file from the store
+    removeFile(fileToRemove.name);
   };
 
   // Cleanup preview URLs when component unmounts
@@ -83,21 +83,21 @@ export const FileUpload: React.FC = () => {
           {files.map((fileWithPreview, index) => (
             <div key={index} className="bg-white rounded-lg shadow-md p-4">
               <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-3">
                   <FileText className="w-8 h-8 text-blue-500" />
-                  <div>
+            <div>
                     <p className="text-sm font-medium text-gray-900">{fileWithPreview.file.name}</p>
                     <p className="text-xs text-gray-500">
                       {(fileWithPreview.file.size / 1024).toFixed(2)} KB
-                    </p>
-                  </div>
-                </div>
-                <button
+              </p>
+            </div>
+          </div>
+          <button
                   onClick={() => handleRemove(fileWithPreview.file)}
                   className="p-2 text-gray-400 hover:text-gray-500 rounded-full hover:bg-gray-100"
-                >
+          >
                   <X className="w-5 h-5" />
-                </button>
+          </button>
               </div>
             </div>
           ))}
@@ -108,7 +108,7 @@ export const FileUpload: React.FC = () => {
             <input {...getInputProps()} />
             <Upload className="w-6 h-6 text-gray-400 mr-2" />
             <p className="text-sm text-gray-500">Drop more files here or click to select</p>
-          </div>
+        </div>
         </div>
       )}
     </div>
