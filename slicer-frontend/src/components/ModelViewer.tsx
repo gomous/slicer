@@ -42,6 +42,7 @@ const InteractiveModel = ({
   const transformRef = useRef<any>(null);
   const { gl, camera, raycaster, mouse } = useThree();
   const [isDragging, setIsDragging] = useState(false);
+  const [activeAxis, setActiveAxis] = useState<'x' | 'y' | 'z' | null>(null);
   const lastMousePosition = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // Update transform controls when mode or space changes
@@ -85,30 +86,51 @@ const InteractiveModel = ({
 
   // Handle transform control events
   const handleTransformStart = (e: ThreeEvent<PointerEvent>) => {
-    setIsDragging(true);
-    gl.domElement.style.cursor = 'grabbing';
-    lastMousePosition.current = { x: e.clientX, y: e.clientY };
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handleGlobalPointerUp);
+    // Get the axis that was clicked
+    const axis = e.object.name?.toLowerCase() as 'x' | 'y' | 'z';
+    if (axis) {
+      setActiveAxis(axis);
+      setIsDragging(true);
+      gl.domElement.style.cursor = 'grabbing';
+      lastMousePosition.current = { x: e.clientX, y: e.clientY };
+      window.addEventListener('pointerup', handleGlobalPointerUp);
+      window.addEventListener('pointermove', handlePointerMove);
+    }
   };
 
   const handlePointerMove = (e: PointerEvent) => {
-    if (isDragging && meshRef.current) {
+    if (isDragging && activeAxis && meshRef.current) {
       const deltaX = e.clientX - lastMousePosition.current.x;
       const deltaY = e.clientY - lastMousePosition.current.y;
       lastMousePosition.current = { x: e.clientX, y: e.clientY };
 
       const speed = 0.01;
       if (transformMode === 'translate') {
-        if (transformSpace === 'world') {
-          // World space movement
+        if (activeAxis === 'x') {
           meshRef.current.position.x += deltaX * speed;
+        } else if (activeAxis === 'y') {
           meshRef.current.position.y -= deltaY * speed;
-        } else {
-          // Local space movement
-          const direction = new THREE.Vector3(deltaX * speed, -deltaY * speed, 0);
-          direction.applyQuaternion(meshRef.current.quaternion);
-          meshRef.current.position.add(direction);
+        } else if (activeAxis === 'z') {
+          meshRef.current.position.z += deltaX * speed;
+        }
+        handleTransformChange();
+      } else if (transformMode === 'rotate') {
+        if (activeAxis === 'x') {
+          meshRef.current.rotation.x += deltaY * speed;
+        } else if (activeAxis === 'y') {
+          meshRef.current.rotation.y += deltaX * speed;
+        } else if (activeAxis === 'z') {
+          meshRef.current.rotation.z += deltaX * speed;
+        }
+        handleTransformChange();
+      } else if (transformMode === 'scale') {
+        const scaleDelta = (deltaX + deltaY) * speed;
+        if (activeAxis === 'x') {
+          meshRef.current.scale.x += scaleDelta;
+        } else if (activeAxis === 'y') {
+          meshRef.current.scale.y += scaleDelta;
+        } else if (activeAxis === 'z') {
+          meshRef.current.scale.z += scaleDelta;
         }
         handleTransformChange();
       }
@@ -117,16 +139,17 @@ const InteractiveModel = ({
 
   const handleGlobalPointerUp = () => {
     setIsDragging(false);
+    setActiveAxis(null);
     gl.domElement.style.cursor = 'auto';
-    window.removeEventListener('pointermove', handlePointerMove);
     window.removeEventListener('pointerup', handleGlobalPointerUp);
+    window.removeEventListener('pointermove', handlePointerMove);
   };
 
-  // Cleanup event listeners
+  // Cleanup global event listeners
   useEffect(() => {
     return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handleGlobalPointerUp);
+      window.removeEventListener('pointermove', handlePointerMove);
     };
   }, []);
 
@@ -143,7 +166,7 @@ const InteractiveModel = ({
         onObjectChange={handleTransformChange}
         onPointerDown={handleTransformStart}
         size={1.5}
-        axis={transformMode === 'translate' ? 'xyz' : undefined}
+        axis={activeAxis || undefined}
         translationSnap={isShiftPressed ? 0.1 : null}
         rotationSnap={isShiftPressed ? Math.PI / 12 : null}
         scaleSnap={isShiftPressed ? 0.1 : null}
@@ -183,17 +206,24 @@ const Scene = ({
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const orbitControlsRef = useRef<any>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const processedFiles = useRef<Set<string>>(new Set());
 
+  // Add new model when file is uploaded
   useEffect(() => {
     if (fileState.file) {
-      const newModel: ModelInstance = {
-        id: Date.now().toString(),
-        file: fileState.file,
-        position: [0, 0, 0],
-        rotation: [0, 0, 0],
-        scale: [1, 1, 1]
-      };
-      setModels(prev => [...prev, newModel]);
+      const fileName = fileState.file.name;
+      // Check if we've already processed this file
+      if (!processedFiles.current.has(fileName)) {
+        processedFiles.current.add(fileName);
+        const newModel: ModelInstance = {
+          id: Date.now().toString(),
+          file: fileState.file,
+          position: [0, 0, 0],
+          rotation: [0, 0, 0],
+          scale: [1, 1, 1]
+        };
+        setModels(prev => [...prev, newModel]);
+      }
     }
   }, [fileState.file]);
 
@@ -217,6 +247,20 @@ const Scene = ({
     setIsDragging(dragging);
     if (orbitControlsRef.current) {
       orbitControlsRef.current.enabled = !dragging;
+    }
+  };
+
+  // Remove model
+  const handleRemoveModel = (id: string) => {
+    setModels(prev => {
+      const modelToRemove = prev.find(model => model.id === id);
+      if (modelToRemove) {
+        processedFiles.current.delete(modelToRemove.file.name);
+      }
+      return prev.filter(model => model.id !== id);
+    });
+    if (selectedModelId === id) {
+      setSelectedModelId(null);
     }
   };
 

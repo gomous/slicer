@@ -28,7 +28,12 @@ export const useSlicerStore = create<SlicerStore>((set, get) => ({
     isLoading: false,
   },
   setFile: (file) => set((state) => ({ 
-    fileState: { ...state.fileState, file } 
+    fileState: { 
+      ...state.fileState, 
+      file,
+      // Keep the preview if we're just updating the file
+      preview: file ? state.fileState.preview : null 
+    } 
   })),
   setPreview: (preview) => set((state) => ({ 
     fileState: { ...state.fileState, preview } 
