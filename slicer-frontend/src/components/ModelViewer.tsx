@@ -1,202 +1,374 @@
-import React, { Suspense, useState, useRef, useEffect } from 'react';
-import { Canvas, ThreeEvent, useThree } from '@react-three/fiber';
-import { OrbitControls, Environment, Grid } from '@react-three/drei';
+import React, { useRef, useState, useEffect } from 'react';
+import { Canvas, useThree, useFrame } from '@react-three/fiber';
+import { OrbitControls, TransformControls, Grid, Environment } from '@react-three/drei';
+import { STLModel } from './STLModel';
 import { useSlicerStore } from '../hooks/useSlicerStore';
-import { useFileUploadStore } from '../hooks/useFileUploadStore';
-import { STLModel, STLModelHandle } from './STLModel';
-import { CentralFileDrop } from './CentralFileDrop';
-import { PlusSquare, Grid2x2, Monitor, Layout, FileText, Move, RotateCw, SquareStack, Square, Layers, Crop, Type, Droplet, Ruler, Puzzle } from 'lucide-react';
+import { ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
-import { Vector3, Mesh, MeshStandardMaterial } from 'three';
+import { TransformControlsUI } from './TransformControlsUI';
 
-const LoadingSpinner: React.FC = () => (
-  <div className="absolute inset-0 flex items-center justify-center bg-gray-50">
-    <div className="text-center">
-      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>
-      <p className="text-sm text-gray-600">Loading 3D model...</p>
-    </div>
-  </div>
-);
+interface ModelInstance {
+  id: string;
+  file: File;
+  position: [number, number, number];
+  rotation: [number, number, number];
+  scale: [number, number, number];
+}
 
-const toolbarIcons = [
-  <PlusSquare key="plus" />, <Grid2x2 key="grid" />, <Monitor key="monitor" />, <Layout key="layout" />, <FileText key="file" />,
-  <Move key="move" className="text-blue-600" />, <RotateCw key="rotate" />, <SquareStack key="stack" />, <Square key="square" />, <Layers key="layers" />,
-  <Crop key="crop" />, <Type key="type" />, <Droplet key="droplet" />, <Ruler key="ruler" />, <Puzzle key="puzzle" />
-];
+const InteractiveModel = ({ 
+  modelInstance, 
+  isSelected,
+  onSelect,
+  onTransformChange,
+  transformMode,
+  transformSpace,
+  showX,
+  showY,
+  showZ,
+  isShiftPressed
+}: { 
+  modelInstance: ModelInstance;
+  isSelected: boolean;
+  onSelect: () => void;
+  onTransformChange: (position: [number, number, number], rotation: [number, number, number], scale: [number, number, number]) => void;
+  transformMode: 'translate' | 'rotate' | 'scale';
+  transformSpace: 'world' | 'local';
+  showX: boolean;
+  showY: boolean;
+  showZ: boolean;
+  isShiftPressed: boolean;
+}) => {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const transformRef = useRef<any>(null);
+  const { gl, camera, raycaster, mouse } = useThree();
+  const [isDragging, setIsDragging] = useState(false);
+  const lastMousePosition = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-const InteractiveModel = ({ file, onLoadComplete, onLoadError }: { file: File; onLoadComplete?: () => void; onLoadError?: (error: string) => void }) => {
-  const stlRef = useRef<STLModelHandle>(null);
-
-  const handlePointerOver = (e: ThreeEvent<PointerEvent>) => {
-    e.stopPropagation();
-    stlRef.current?.setColor('#60A5FA');
-  };
-
-  const handlePointerOut = (e: ThreeEvent<PointerEvent>) => {
-    e.stopPropagation();
-    stlRef.current?.setColor('#3B82F6');
-  };
-
-  return (
-    <STLModel
-      ref={stlRef}
-      file={file}
-      onLoadComplete={onLoadComplete}
-      onLoadError={onLoadError}
-      onPointerOver={handlePointerOver}
-      onPointerOut={handlePointerOut}
-    />
-  );
-};
-
-export const ModelViewer: React.FC = () => {
-  const { fileState, setFile, setPreview, setFileLoading } = useSlicerStore();
-  const { addFile } = useFileUploadStore();
-  const [moveMode, setMoveMode] = useState(false);
-  const [modelPosition, setModelPosition] = useState<[number, number, number]>([0, 0, 0]);
-  const dragStart = useRef<{ x: number; y: number; pos: [number, number, number] } | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleLoadComplete = () => {
-    setFileLoading(false);
-    setIsLoading(false);
-  };
-
-  const handleLoadError = (error: string) => {
-    setFileLoading(false);
-    setIsLoading(false);
-    setError(error);
-    console.error('STL Load Error:', error);
-  };
-
-  const handleStlFile = (file: File) => {
-    if (!file.name.toLowerCase().endsWith('.stl')) {
-      return;
+  // Update transform controls when mode or space changes
+  useEffect(() => {
+    if (transformRef.current) {
+      transformRef.current.setMode(transformMode);
+      transformRef.current.setSpace(transformSpace);
     }
-    setFileLoading(true);
-    setFile(file);
-    addFile(file);
-    if (fileState.preview) {
-      URL.revokeObjectURL(fileState.preview);
+  }, [transformMode, transformSpace]);
+
+  // Update snap settings when shift key changes
+  useEffect(() => {
+    if (transformRef.current) {
+      transformRef.current.setTranslationSnap(isShiftPressed ? 0.1 : null);
+      transformRef.current.setRotationSnap(isShiftPressed ? Math.PI / 12 : null);
+      transformRef.current.setScaleSnap(isShiftPressed ? 0.1 : null);
     }
-    const url = URL.createObjectURL(file);
-    setPreview(url);
+  }, [isShiftPressed]);
+
+  // Handle transform changes
+  const handleTransformChange = () => {
+    if (meshRef.current) {
+      const position = meshRef.current.position.toArray() as [number, number, number];
+      const rotation = meshRef.current.rotation.toArray() as [number, number, number];
+      const scale = meshRef.current.scale.toArray() as [number, number, number];
+      onTransformChange(position, rotation, scale);
+    }
   };
 
-  // Handle mouse events for moving the model
+  // Handle pointer events
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
-    if (!moveMode) return;
     e.stopPropagation();
-    
-    dragStart.current = {
-      x: e.clientX,
-      y: e.clientY,
-      pos: [...modelPosition],
-    };
-    
-    // Use pointer events instead of mouse events
-    document.addEventListener('pointermove', handlePointerMove as EventListener);
-    document.addEventListener('pointerup', handlePointerUp);
+    onSelect();
+  };
+
+  const handlePointerMissed = () => {
+    if (isSelected && !isDragging) {
+      onSelect();
+    }
+  };
+
+  // Handle transform control events
+  const handleTransformStart = (e: ThreeEvent<PointerEvent>) => {
+    setIsDragging(true);
+    gl.domElement.style.cursor = 'grabbing';
+    lastMousePosition.current = { x: e.clientX, y: e.clientY };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handleGlobalPointerUp);
   };
 
   const handlePointerMove = (e: PointerEvent) => {
-    if (!dragStart.current) return;
-    
-    // Calculate movement based on pointer pressure and type
-    const pressure = e.pressure || 0.5; // Fallback if pressure is not supported
-    const dx = (e.clientX - dragStart.current.x) * 0.01 * pressure;
-    const dy = (e.clientY - dragStart.current.y) * 0.01 * pressure;
-    
-    setModelPosition([
-      dragStart.current.pos[0] + dx,
-      dragStart.current.pos[1] - dy,
-      dragStart.current.pos[2],
-    ]);
+    if (isDragging && meshRef.current) {
+      const deltaX = e.clientX - lastMousePosition.current.x;
+      const deltaY = e.clientY - lastMousePosition.current.y;
+      lastMousePosition.current = { x: e.clientX, y: e.clientY };
+
+      const speed = 0.01;
+      if (transformMode === 'translate') {
+        if (transformSpace === 'world') {
+          // World space movement
+          meshRef.current.position.x += deltaX * speed;
+          meshRef.current.position.y -= deltaY * speed;
+        } else {
+          // Local space movement
+          const direction = new THREE.Vector3(deltaX * speed, -deltaY * speed, 0);
+          direction.applyQuaternion(meshRef.current.quaternion);
+          meshRef.current.position.add(direction);
+        }
+        handleTransformChange();
+      }
+    }
   };
 
-  const handlePointerUp = (e: PointerEvent) => {
-    dragStart.current = null;
-    document.removeEventListener('pointermove', handlePointerMove as EventListener);
-    document.removeEventListener('pointerup', handlePointerUp);
+  const handleGlobalPointerUp = () => {
+    setIsDragging(false);
+    gl.domElement.style.cursor = 'auto';
+    window.removeEventListener('pointermove', handlePointerMove);
+    window.removeEventListener('pointerup', handleGlobalPointerUp);
+  };
+
+  // Cleanup event listeners
+  useEffect(() => {
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+    };
+  }, []);
+
+  return (
+    <group>
+      <TransformControls
+        ref={transformRef}
+        mode={transformMode}
+        space={transformSpace}
+        showX={showX}
+        showY={showY}
+        showZ={showZ}
+        enabled={isSelected}
+        onObjectChange={handleTransformChange}
+        onPointerDown={handleTransformStart}
+        size={1.5}
+        axis={transformMode === 'translate' ? 'xyz' : undefined}
+        translationSnap={isShiftPressed ? 0.1 : null}
+        rotationSnap={isShiftPressed ? Math.PI / 12 : null}
+        scaleSnap={isShiftPressed ? 0.1 : null}
+      >
+        <mesh
+          ref={meshRef}
+          position={modelInstance.position}
+          rotation={modelInstance.rotation}
+          scale={modelInstance.scale}
+          onPointerDown={handlePointerDown}
+          onPointerMissed={handlePointerMissed}
+        >
+          <STLModel file={modelInstance.file} />
+        </mesh>
+      </TransformControls>
+    </group>
+  );
+};
+
+const Scene = ({ 
+  transformMode, 
+  transformSpace, 
+  showX, 
+  showY, 
+  showZ,
+  isShiftPressed
+}: { 
+  transformMode: 'translate' | 'rotate' | 'scale';
+  transformSpace: 'world' | 'local';
+  showX: boolean;
+  showY: boolean;
+  showZ: boolean;
+  isShiftPressed: boolean;
+}) => {
+  const { fileState } = useSlicerStore();
+  const [models, setModels] = useState<ModelInstance[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const orbitControlsRef = useRef<any>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  useEffect(() => {
+    if (fileState.file) {
+      const newModel: ModelInstance = {
+        id: Date.now().toString(),
+        file: fileState.file,
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1]
+      };
+      setModels(prev => [...prev, newModel]);
+    }
+  }, [fileState.file]);
+
+  const handleTransformChange = (id: string, position: [number, number, number], rotation: [number, number, number], scale: [number, number, number]) => {
+    setModels(prev => prev.map(model => 
+      model.id === id 
+        ? { ...model, position, rotation, scale }
+        : model
+    ));
+  };
+
+  // Handle click outside to deselect
+  const handleCanvasClick = (e: ThreeEvent<PointerEvent>) => {
+    if (e.target === e.currentTarget) {
+      setSelectedModelId(null);
+    }
+  };
+
+  // Handle transform dragging
+  const handleTransformDragging = (dragging: boolean) => {
+    setIsDragging(dragging);
+    if (orbitControlsRef.current) {
+      orbitControlsRef.current.enabled = !dragging;
+    }
   };
 
   return (
-    <div className="relative h-full bg-gradient-to-br from-gray-50 to-gray-100 rounded-lg border border-gray-200">
-      {/* Floating Toolbar */}
-      <div className="absolute left-1/2 top-2 -translate-x-1/2 z-20 flex items-center space-x-2 bg-white shadow-lg rounded-lg px-3 py-1 border border-gray-200" style={{ pointerEvents: 'auto' }}>
-        {toolbarIcons.map((icon, i) => (
-          <button
-            key={i}
-            className={`p-1.5 rounded hover:bg-gray-100 text-gray-500 ${i === 5 ? (moveMode ? 'bg-blue-100 text-blue-600' : 'text-blue-600') : ''}`}
-            disabled={!fileState.file || (moveMode ? i !== 5 : (i > 3 && i !== toolbarIcons.length - 1))}
-            onClick={() => {
-              if (i === 5) setMoveMode(m => !m);
-            }}
-            title={i === 5 ? (moveMode ? 'Exit Move Mode' : 'Move Model') : undefined}
-          >
-            {icon}
-          </button>
-        ))}
-      </div>
-      {!fileState.file ? (
-        <CentralFileDrop
-          accept=".stl"
-          onFile={handleStlFile}
-          message="Upload STL file here"
-        />
-      ) : (
-        <div style={{ cursor: moveMode ? 'grab' : 'auto', width: '100%', height: '100%' }}>
-          <Canvas
-            camera={{ position: [5, 5, 5], fov: 50 }}
-            style={{ background: 'transparent', width: '100%', height: '100%' }}
-          >
-            <Suspense fallback={
-              <mesh rotation={[0, 0, 0]}>
-                <boxGeometry args={[0.5, 0.5, 0.5]} />
-                <meshStandardMaterial color="#94A3B8" transparent opacity={0.5} />
-              </mesh>
-            }>
-              <Environment preset="studio" />
-              <ambientLight intensity={0.4} />
-              <directionalLight position={[10, 10, 5]} intensity={0.8} />
-              <directionalLight position={[-10, -10, -5]} intensity={0.3} />
-              <Grid
-                args={[10, 10]}
-                cellSize={1}
-                cellThickness={0.5}
-                cellColor="#6B7280"
-                sectionSize={5}
-                sectionThickness={1}
-                sectionColor="#374151"
-                fadeDistance={25}
-                fadeStrength={1}
-                followCamera={false}
-                infiniteGrid={true}
-              />
-              <group
-                position={modelPosition}
-                onPointerDown={handlePointerDown}
-              >
-                <InteractiveModel 
-                  file={fileState.file}
-                  onLoadComplete={handleLoadComplete}
-                  onLoadError={handleLoadError}
-                />
-              </group>
-              <OrbitControls
-                enablePan={!moveMode}
-                enableZoom={true}
-                enableRotate={!moveMode}
-                minDistance={2}
-                maxDistance={20}
-              />
-            </Suspense>
-          </Canvas>
-        </div>
-      )}
+    <>
+      <Environment preset="studio" />
+      <ambientLight intensity={0.4} />
+      <directionalLight position={[10, 10, 5]} intensity={0.8} />
+      <directionalLight position={[-10, -10, -5]} intensity={0.3} />
       
-      {isLoading && <LoadingSpinner />}
+      <Grid
+        args={[10, 10]}
+        cellSize={1}
+        cellThickness={0.5}
+        cellColor="#6B7280"
+        sectionSize={5}
+        sectionThickness={1}
+        sectionColor="#374151"
+        fadeDistance={25}
+        fadeStrength={1}
+        followCamera={false}
+        infiniteGrid={true}
+      />
+
+      {models.map(model => (
+        <InteractiveModel
+          key={model.id}
+          modelInstance={model}
+          isSelected={model.id === selectedModelId}
+          onSelect={() => setSelectedModelId(model.id)}
+          onTransformChange={(pos, rot, scale) => handleTransformChange(model.id, pos, rot, scale)}
+          transformMode={transformMode}
+          transformSpace={transformSpace}
+          showX={showX}
+          showY={showY}
+          showZ={showZ}
+          isShiftPressed={isShiftPressed}
+        />
+      ))}
+
+      <OrbitControls
+        ref={orbitControlsRef}
+        enablePan={!isDragging}
+        enableZoom={!isDragging}
+        enableRotate={!isDragging}
+        minDistance={2}
+        maxDistance={20}
+        makeDefault
+      />
+
+      <mesh onPointerDown={handleCanvasClick} visible={false}>
+        <planeGeometry args={[1000, 1000]} />
+        <meshBasicMaterial />
+      </mesh>
+    </>
+  );
+};
+
+export const ModelViewer = () => {
+  const [transformMode, setTransformMode] = useState<'translate' | 'rotate' | 'scale'>('translate');
+  const [transformSpace, setTransformSpace] = useState<'world' | 'local'>('world');
+  const [showX, setShowX] = useState(true);
+  const [showY, setShowY] = useState(true);
+  const [showZ, setShowZ] = useState(true);
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const [isShiftPressed, setIsShiftPressed] = useState(false);
+
+  // Keyboard controls
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      switch (e.key.toLowerCase()) {
+        case 'w':
+          setTransformMode('translate');
+          break;
+        case 'e':
+          setTransformMode('rotate');
+          break;
+        case 'r':
+          setTransformMode('scale');
+          break;
+        case 'q':
+          setTransformSpace(prev => prev === 'world' ? 'local' : 'world');
+          break;
+        case 'x':
+          setShowX(prev => !prev);
+          break;
+        case 'y':
+          setShowY(prev => !prev);
+          break;
+        case 'z':
+          setShowZ(prev => !prev);
+          break;
+        case 'escape':
+          setSelectedModelId(null);
+          break;
+        case 'shift':
+          setIsShiftPressed(true);
+          break;
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === 'shift') {
+        setIsShiftPressed(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, []);
+
+  return (
+    <div className="w-full h-full relative">
+      <Canvas
+        camera={{ position: [5, 5, 5], fov: 50 }}
+        style={{ background: 'transparent', width: '100%', height: '100%' }}
+      >
+        <Scene
+          transformMode={transformMode}
+          transformSpace={transformSpace}
+          showX={showX}
+          showY={showY}
+          showZ={showZ}
+          isShiftPressed={isShiftPressed}
+        />
+      </Canvas>
+      <TransformControlsUI
+        mode={transformMode}
+        space={transformSpace}
+        showX={showX}
+        showY={showY}
+        showZ={showZ}
+        onModeChange={setTransformMode}
+        onSpaceChange={setTransformSpace}
+        onAxisToggle={(axis) => {
+          switch (axis) {
+            case 'x':
+              setShowX(prev => !prev);
+              break;
+            case 'y':
+              setShowY(prev => !prev);
+              break;
+            case 'z':
+              setShowZ(prev => !prev);
+              break;
+          }
+        }}
+      />
     </div>
   );
 };
